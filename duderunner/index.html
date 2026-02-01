@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Love Today: The Panic Run</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+            touch-action: none;
+            /* Prevent mobile scroll/zoom */
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        @import url('https://fonts.googleapis.com/css2?family=Bangers&family=Roboto:wght@700&display=swap');
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+</head>
+
+<body>
+    <div id="game-container"></div>
+
+    <script>
+        // Game Configuration
+        const config = {
+            type: Phaser.AUTO,
+            scale: {
+                mode: Phaser.Scale.FIT,
+                parent: 'game-container',
+                width: 1280,
+                height: 720,
+                autoCenter: Phaser.Scale.CENTER_BOTH
+            },
+            physics: {
+                default: 'arcade',
+                arcade: {
+                    gravity: { y: 1500 },
+                    debug: false // ENABLE DEBUG TO SEE HITBOXES
+                }
+            },
+            scene: {
+                preload: preload,
+                create: create,
+                update: update
+            }
+        };
+
+        const game = new Phaser.Game(config);
+
+        // =====================================================
+        // TUNABLE CONFIGURATION - CHANGE THESE VALUES!
+        // =====================================================
+        const CONFIG = {
+            // GROUND
+            // GROUND
+            groundHeight: 609,          // Height of ground sprite (increase to make ground taller)
+            floorOffset: 30,            // Distance from bottom where floor is (hero stands here)
+
+            heroScale: 0.18,            // Hero sprite scale (increase to make hero bigger)
+            heroX: 150,                 // Hero horizontal position
+            heroBodyWidth: 300,         // Hero hitbox width (before scaling)
+            heroBodyHeight: 550,        // Hero hitbox height (before scaling)
+            heroOffsetX: 50,            // Hero hitbox X offset
+            heroOffsetY: 10,            // Hero hitbox Y offset (keep LOW! 0-50)
+            jumpVelocity: -900,         // Jump power (more negative = higher jump)
+
+            // OBSTACLES
+            obstacleMaxHeight: 150,      // Max obstacle height
+            obstacleMinHeight: 70,       // Min obstacle height
+
+            // SKY
+            skyTileScale: 0.5,          // Sky texture scale (increase to zoom in)
+
+            // GAME
+            initialSpeed: 350,          // Starting game speed
+            speedIncrease: 20,          // Speed increase every 10 seconds
+        };
+        // =====================================================
+
+        // Global Variables
+        let player;
+        let ground;
+        let bgSky;
+        let bgGround;
+        let cursors;
+        let jumpButton;
+        let obstacles;
+        let coins;
+        let gameSpeed = CONFIG.initialSpeed;
+        let nextSpawnTime = 0;
+        let isGameOver = false;
+        let score = 0;      // Distance score
+        let coinScore = 0;  // Mango count
+        let scoreText;
+        let coinText;
+        let gameOverContainer;
+        let currentLevel = 1; // Track level 1 or 2
+        let gameStarted = false;
+        let startContainer;
+
+        // Sounds
+        let soundBgm;
+        let soundBgm2;
+        let soundJump;
+        let soundGameOver;
+        let soundCoin;
+
+
+        function preload() {
+            // Load Hero as IMAGE (Base for Atlas) - NORMALIZED VERSION
+            this.load.image('hero_sheet', 'assets/hero_sheet_normalized.png');
+            // Backgrounds
+            this.load.image('bg_sky', 'assets/bg_sky.png');
+            this.load.image('bg_ground', 'assets/bg_ground.png');
+            this.load.image('barricade', 'assets/obstacle_barricade.png');
+            this.load.image('metro', 'assets/obstacle_metro.png');
+            this.load.image('mango', 'assets/mango.png'); // Mango as Coin
+
+            // Level 2 Assets
+            this.load.image('bg_sky2', 'assets/bg_sky2.png');
+            this.load.image('bg_ground2', 'assets/bg_ground2.png');
+            this.load.image('car', 'assets/obstacle_car.png');
+            this.load.image('bike', 'assets/obstacle_bike.png');
+            this.load.image('logo', 'assets/logo.png');
+
+            // Audio
+            this.load.audio('bgm', 'audio/bg_audio.mp3');
+            this.load.audio('bgm2', 'audio/bg2.mp3');
+            this.load.audio('jump', 'audio/jump.mp3');
+            this.load.audio('gameover', 'audio/game-over.mp3');
+        }
+
+        // Check for file protocol
+        if (window.location.protocol === 'file:') {
+            alert("⚠️ SECURITY WARNING ⚠️\n\nThis game CANNOT run directly from the folder due to browser security (CORS).\n\nPlease run 'play_game.bat' to play!");
+
+            // Add a visual warning on screen
+            window.addEventListener('load', () => {
+                const div = document.createElement('div');
+                div.style.position = 'fixed';
+                div.style.top = '0'; div.style.left = '0'; div.style.width = '100%'; div.style.height = '100%';
+                div.style.backgroundColor = 'rgba(255,0,0,0.9)';
+                div.style.color = 'white'; div.style.display = 'flex'; div.style.justifyContent = 'center'; div.style.alignItems = 'center';
+                div.style.fontSize = '24px'; div.style.zIndex = '9999'; div.style.textAlign = 'center';
+                div.innerText = "GAME STOPPED\n\nYou are opening this file directly.\nPlease double-click 'play_game.bat' instead!";
+                document.body.appendChild(div);
+            });
+        }
+
+        function create() {
+            const width = this.scale.width;
+            const height = this.scale.height;
+
+            isGameOver = false;
+            gameSpeed = 350;
+            score = 0;
+
+            // --- Single Source of Truth for Ground Level ---
+            // This is the exact Y pixel where the floor surface starts
+            const FLOOR_Y = height - CONFIG.floorOffset;
+
+            // --- Dynamic Atlas Generation ---
+            if (this.textures.exists('hero_sheet')) {
+                const sheet = this.textures.get('hero_sheet');
+                try {
+                    sheet.add('run0', 0, 0, 0, 439, 878);
+                    sheet.add('run1', 0, 439, 0, 439, 878);
+                    sheet.add('run2', 0, 878, 0, 439, 878);
+                    sheet.add('run3', 0, 1317, 0, 439, 878);
+                    sheet.add('jump', 0, 658, 878, 439, 878);
+                } catch (e) {
+                    console.error("Error adding frames to texture:", e);
+                }
+
+                this.anims.create({
+                    key: 'run',
+                    frames: [
+                        { key: 'hero_sheet', frame: 'run0' },
+                        { key: 'hero_sheet', frame: 'run1' },
+                        { key: 'hero_sheet', frame: 'run2' },
+                        { key: 'hero_sheet', frame: 'run3' }
+                    ],
+                    frameRate: 10,
+                    repeat: -1
+                });
+                this.anims.create({
+                    key: 'jump',
+                    frames: [{ key: 'hero_sheet', frame: 'jump' }],
+                    frameRate: 10
+                });
+            } else {
+                // Fallback
+                const g = this.make.graphics({ x: 0, y: 0 }).fillStyle(0x00ff00).fillRect(0, 0, 64, 96);
+                g.generateTexture('hero_sheet', 64, 96);
+                this.anims.create({ key: 'run', frames: [{ key: 'hero_sheet' }], repeat: -1 });
+                this.anims.create({ key: 'jump', frames: [{ key: 'hero_sheet' }] });
+            }
+
+            // Create placeholder textures if missing
+            if (!this.textures.exists('bg_sky')) {
+                const g = this.make.graphics({ x: 0, y: 0 }).fillStyle(0x87CEEB).fillRect(0, 0, 64, 64);
+                g.generateTexture('bg_sky', 64, 64);
+            }
+            if (!this.textures.exists('bg_ground')) {
+                const g = this.make.graphics({ x: 0, y: 0 }).fillStyle(0x8B4513).fillRect(0, 0, 64, 64);
+                g.generateTexture('bg_ground', 64, 64);
+            }
+            if (!this.textures.exists('barricade')) {
+                const g = this.make.graphics({ x: 0, y: 0 }).fillStyle(0xFFA500).fillRect(0, 0, 40, 40);
+                g.generateTexture('barricade', 40, 40);
+            }
+            if (!this.textures.exists('metro')) {
+                const g = this.make.graphics({ x: 0, y: 0 }).fillStyle(0x808080).fillRect(0, 0, 60, 40);
+                g.generateTexture('metro', 60, 40);
+            }
+
+            // --- Backgrounds ---
+            bgSky = this.add.tileSprite(width / 2, height / 2, width, height, 'bg_sky');
+            bgSky.setScrollFactor(0);
+            const skyTex = this.textures.get('bg_sky').getSourceImage();
+            if (skyTex.width > 1000) bgSky.setTileScale(CONFIG.skyTileScale, CONFIG.skyTileScale);
+
+            // --- Visual Ground ---
+            // Align bottom-left (0, 1) to screen bottom
+            bgGround = this.add.tileSprite(0, height, width, CONFIG.groundHeight, 'bg_ground');
+            bgGround.setOrigin(0, 1);
+            bgGround.setScrollFactor(0);
+            bgGround.setDepth(5);
+            const gTex = this.textures.get('bg_ground').getSourceImage();
+            bgGround.setTileScale(CONFIG.groundHeight / gTex.height, CONFIG.groundHeight / gTex.height);
+
+            // --- Physics Ground ---
+            // Create texture
+            const floorHeight = 100;
+            const floorGraphics = this.make.graphics({ x: 0, y: 0 });
+            floorGraphics.fillStyle(0x0000ff, 0.5); // Blue debug
+            floorGraphics.fillRect(0, 0, 100, floorHeight);
+            floorGraphics.generateTexture('floor_tex', 100, floorHeight);
+            floorGraphics.destroy();
+
+            ground = this.physics.add.staticGroup();
+
+            // Create floor at FLOOR_Y with Top-Center origin
+            // This ensures the top edge is exactly at FLOOR_Y
+            const floor = ground.create(width / 2, FLOOR_Y, 'floor_tex');
+            floor.setOrigin(0.5, 0);
+            floor.setDisplaySize(width * 2, floorHeight);
+            floor.refreshBody();
+            floor.setAlpha(0.5); // Keep visible for debug
+
+            // --- Player ---
+            let playerKey = 'hero_sheet';
+
+            // Spawn player with feet at FLOOR_Y
+            // We use origin (0.5, 1) so Y represents the feet position
+            player = this.physics.add.sprite(CONFIG.heroX, FLOOR_Y - 50, playerKey, 'run0');
+            player.setOrigin(0.5, 1);
+            player.setScale(CONFIG.heroScale);
+            player.setDepth(10);
+
+            // Adjust physics body to match visual sprite
+            player.setCollideWorldBounds(true);
+
+            // Manual body sizing to fit the visible character within the sprite
+            player.body.setSize(CONFIG.heroBodyWidth, CONFIG.heroBodyHeight);
+
+            // Since origin is (0.5, 1), calculating offset is tricky in arcade physics.
+            // Arcade Physics always assumes body offset from Top-Left.
+            // But setSize() recenters if center=true (default).
+            // We need to manually align the bottom of the body with bottom of sprite:
+            // OffsetY = SpriteHeight - BodyHeight
+            const pW = player.body.sourceWidth * CONFIG.heroScale; // Scaled width? No, source dimensions
+            // Actually, keep it simple. Automatic first.
+            // Fine tuning:
+            const offsetX = (player.width - CONFIG.heroBodyWidth) / 2;
+            const offsetY = player.height - CONFIG.heroBodyHeight;
+            player.setOffset(offsetX, offsetY);
+
+            this.physics.add.collider(player, ground);
+
+            // Start animation
+            player.play('run');
+
+            // --- Obstacles ---
+            obstacles = this.physics.add.group();
+            obstacles.setDepth(9);
+            this.physics.add.collider(player, obstacles, hitObstacle, null, this);
+            this.physics.add.collider(obstacles, ground);
+
+            // --- Coins (Mangoes) ---
+            coins = this.physics.add.group();
+            coins.setDepth(9);
+            this.physics.add.overlap(player, coins, collectCoin, null, this);
+
+            // --- Inputs ---
+            cursors = this.input.keyboard.createCursorKeys();
+            jumpButton = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+            this.input.on('pointerdown', () => {
+                if (!gameStarted) startGame();
+                else if (!isGameOver) jump();
+            });
+
+            this.input.keyboard.on('keydown', (event) => {
+                if (!gameStarted && event.code === 'Space') startGame();
+                else if (isGameOver) restartGame();
+            });
+
+            // --- UI ---
+            scoreText = this.add.text(20, 20, 'Distance: 0m', {
+                fontSize: '32px', fill: '#ffffff', fontFamily: 'Arial Black', stroke: '#000', strokeThickness: 5
+            }).setScrollFactor(0).setDepth(10);
+
+            coinText = this.add.text(width - 20, 20, 'Mangoes: 0', {
+                fontSize: '32px', fill: '#FFD700', fontFamily: 'Arial Black', stroke: '#000', strokeThickness: 5
+            }).setOrigin(1, 0).setScrollFactor(0).setDepth(10);
+
+            gameOverContainer = this.add.container(width / 2, height / 2);
+            gameOverContainer.setDepth(100);
+            gameOverContainer.setVisible(false);
+            const bgRect = this.add.rectangle(0, 0, 400, 250, 0x000000, 0.85);
+            const goText = this.add.text(0, -40, 'GAME OVER', { fontSize: '36px', fill: '#ff0055', fontFamily: 'Arial Black' }).setOrigin(0.5);
+            const tipText = this.add.text(0, 40, 'Tap to Retry', { fontSize: '24px', fill: '#ffffff' }).setOrigin(0.5);
+            const restartZone = this.add.zone(0, 0, 400, 250).setInteractive();
+            restartZone.on('pointerdown', restartGame);
+            gameOverContainer.add([bgRect, goText, tipText, restartZone]);
+
+            // Timer
+            this.time.addEvent({
+                delay: 10000,
+                callback: () => { if (!isGameOver) gameSpeed += 20; },
+                loop: true
+            });
+
+            // --- Audio Setup ---
+            try {
+                soundJump = this.sound.add('jump', { volume: 0.5 });
+                soundGameOver = this.sound.add('gameover', { volume: 0.8 });
+                soundBgm = this.sound.add('bgm', { volume: 0.4, loop: true });
+                soundBgm2 = this.sound.add('bgm2', { volume: 0.4, loop: true });
+            } catch (e) { console.warn("Audio missing"); }
+
+            // --- Start Screen ---
+            startContainer = this.add.container(width / 2, height / 2);
+            startContainer.setDepth(50);
+
+            const logoImg = this.add.image(0, -50, 'logo');
+            logoImg.setScale(0.5); // Tune scale
+
+            const startMsg = this.add.text(0, 150, 'Press SPACE to Play', {
+                fontSize: '48px', fill: '#ffffff', fontFamily: 'Arial Black', stroke: '#000', strokeThickness: 6
+            }).setOrigin(0.5);
+
+            this.tweens.add({
+                targets: startMsg,
+                scale: 1.1,
+                duration: 800,
+                yoyo: true,
+                repeat: -1
+            });
+
+            startContainer.add([logoImg, startMsg]);
+
+            // Initial State: Paused (Game hasn't started)
+            gameStarted = false;
+            scoreText.setVisible(false);
+            coinText.setVisible(false);
+
+            // Player Idle
+            // Player Idle
+            if (player.anims.exists('run')) {
+                player.anims.pause();
+                player.setFrame(0);
+            }
+
+            this.scale.on('resize', resize, this);
+
+            // FIT mode doesn't always fire resize event on start, so we call it manually
+            // to ensure floor and background are positioned correctly for 1280x720
+            resize.call(this, { width: this.scale.width, height: this.scale.height });
+        }
+
+        function startGame() {
+            if (gameStarted) return;
+            gameStarted = true;
+
+            startContainer.setVisible(false);
+            scoreText.setVisible(true);
+            coinText.setVisible(true);
+
+            player.anims.resume();
+
+            if (soundBgm && !soundBgm.isPlaying) soundBgm.play();
+        }
+
+        function update(time, delta) {
+            if (!gameStarted || isGameOver) return;
+
+            const dt = delta / 1000;
+
+            // Scroll
+            bgSky.tilePositionX += 20 * dt;
+            bgGround.tilePositionX += gameSpeed * dt * (1 / bgGround.tileScaleX);
+
+            // Animation logic - prevent glitching
+            const onGround = player.body.touching.down || player.body.blocked.down;
+
+            if (onGround) {
+                // On ground - play run animation if not already running
+                if (!player.anims.isPlaying || player.anims.currentAnim?.key === 'jump') {
+                    player.play('run');
+                }
+                // Handle jump input
+                if (cursors.space.isDown || cursors.up.isDown) {
+                    jump();
+                }
+            } else {
+                // In air - show jump frame (static, not animated)
+                if (player.anims.currentAnim?.key !== 'jump') {
+                    player.play('jump');
+                }
+            }
+
+            // Score
+            score += gameSpeed * dt * 0.05;
+            scoreText.setText('Distance: ' + Math.floor(score) + 'm');
+
+            // Spawning
+            if (time > nextSpawnTime) {
+                spawnObstacle(this);
+                const minTime = Math.max(800, 2500 - gameSpeed);
+                nextSpawnTime = time + Phaser.Math.Between(minTime, minTime + 1000);
+            }
+
+            // Cleanup
+            obstacles.children.each(o => {
+                if (o.x < -100) o.destroy();
+            });
+            coins.children.each(c => {
+                if (c.x < -100) c.destroy();
+            });
+
+            // Randomly spawn coins
+            if (Phaser.Math.Between(0, 100) > 98) {
+                spawnCoin(this);
+            }
+
+            // Level 2 Transition
+            if (currentLevel === 1 && score >= 2500) {
+                startLevel2(this);
+            }
+        }
+
+
+
+
+        function jump() {
+            // Check both touching AND blocked for reliable ground detection
+            const onGround = player.body.touching.down || player.body.blocked.down;
+            if (onGround) {
+                player.setVelocityY(CONFIG.jumpVelocity);
+                if (soundJump) soundJump.play();
+            }
+        }
+
+        function spawnCoin(scene) {
+            const width = scene.scale.width;
+            const height = scene.scale.height;
+            const FLOOR_Y = height - CONFIG.floorOffset;
+
+            // Decide Height: Ground or Air (above obstacle height)
+            // Air spawn: FLOOR_Y - 150 (jump height approx)
+            // Ground spawn: FLOOR_Y - 40
+            const isAir = Phaser.Math.Between(0, 100) > 50;
+            const spawnY = isAir ? FLOOR_Y - 200 : FLOOR_Y - 50;
+
+            // Don't spawn too close to existing obstacles/coins to prevent clutter
+            // (Simple check: just spawn off screen)
+            const x = width + Phaser.Math.Between(100, 400);
+
+            const coin = coins.create(x, spawnY, 'mango');
+            coin.setOrigin(0.5, 0.5);
+            coin.setScale(0.12); // Tune size as needed
+
+            // Physics
+            coin.body.allowGravity = false;
+            coin.setImmovable(true);
+            coin.setVelocityX(-gameSpeed);
+
+            // Spin animation
+            const tween = scene.tweens.add({
+                targets: coin,
+                angle: 360,
+                duration: 1000,
+                repeat: -1,
+                ease: 'Linear'
+            });
+            coin.setData('tween', tween); // Store tween to stop it later
+        }
+
+        function collectCoin(player, coin) {
+            coin.destroy();
+
+            // Play Sound (using jump sound pitch shifted or if we had a specific one)
+            // For now, no specific coin sound, maybe just log or create a beep context if possible. 
+            // Or reuse jump sound very quietly
+            if (soundJump) soundJump.play({ volume: 0.2, rate: 2.0 }); // High pitch beep
+
+            coinScore += 10;
+            coinText.setText('Mangoes: ' + coinScore);
+
+            // Visual Pop
+            const scorePopup = this.add.text(player.x, player.y - 50, '+10', {
+                fontSize: '24px', fill: '#FFD700', stroke: '#000', strokeThickness: 3
+            }).setOrigin(0.5);
+
+            this.tweens.add({
+                targets: scorePopup,
+                y: player.y - 100,
+                alpha: 0,
+                duration: 800,
+                onComplete: () => scorePopup.destroy()
+            });
+        }
+
+
+
+        function hitObstacle(player, obstacle) {
+            if (isGameOver) return;
+            isGameOver = true;
+            this.physics.pause();
+
+            if (soundBgm) soundBgm.stop();
+            if (soundGameOver) soundGameOver.play();
+
+            player.setTint(0xff0000);
+            this.cameras.main.shake(500, 0.05);
+            gameOverContainer.setVisible(true);
+        }
+
+        function restartGame() {
+            location.reload();
+        }
+
+        function resize(gameSize) {
+            const width = gameSize.width;
+            const height = gameSize.height;
+            const FLOOR_Y = height - CONFIG.floorOffset;
+
+            this.physics.world.setBounds(0, 0, width, height);
+
+            bgSky.setSize(width, height);
+            bgSky.setPosition(width / 2, height / 2);
+
+            // Ground from CONFIG
+            bgGround.setSize(width, CONFIG.groundHeight);
+            bgGround.setPosition(0, height);
+
+            if (ground) {
+                ground.clear(true, true);
+                const floorHeight = 100;
+                // Create floor at FLOOR_Y with Top-Center origin
+                const floor = ground.create(width / 2, FLOOR_Y, 'floor_tex');
+                floor.setOrigin(0.5, 0);
+                floor.setDisplaySize(width * 2, floorHeight);
+                floor.refreshBody();
+                floor.setAlpha(0.5);
+            }
+
+            if (gameOverContainer) gameOverContainer.setPosition(width / 2, height / 2);
+
+            if (player && player.y > height) {
+                player.y = FLOOR_Y - 50;
+                player.setVelocity(0, 0);
+            }
+        }
+
+        function spawnObstacle(scene) {
+            const width = scene.scale.width;
+            const height = scene.scale.height;
+            const FLOOR_Y = height - CONFIG.floorOffset;
+
+            const type = Phaser.Math.Between(1, 100);
+            let key = 'barricade';
+
+            if (currentLevel === 2) {
+                // Level 2: Car and Bike
+                key = (type > 50) ? 'car' : 'bike';
+            } else {
+                // Level 1: Metro and Barricade
+                key = (type > 60) ? 'metro' : 'barricade';
+            }
+
+            if (!scene.textures.exists(key)) key = 'barricade';
+
+            // Spawn Position - X off-screen, Y at FLOOR_Y
+            // Add +20 to push them slightly into the sand
+            const obs = obstacles.create(width + 100, FLOOR_Y + 45, key);
+            obs.setDepth(9);
+            obs.setOrigin(0.5, 1); // Anchor at Bottom Center
+
+            // Scale Logic
+            if (obs.height > CONFIG.obstacleMaxHeight) {
+                obs.setScale(CONFIG.obstacleMaxHeight / obs.height);
+            } else if (obs.height < CONFIG.obstacleMinHeight) {
+                obs.setScale(CONFIG.obstacleMinHeight / obs.height);
+            } else {
+                obs.setScale(1.5);
+            }
+
+            // Physics Logic
+            obs.setImmovable(true);
+            obs.body.allowGravity = false;
+            obs.setVelocityX(-gameSpeed);
+
+            // Hitbox
+            const w = obs.width; // Texture width
+            const h = obs.height; // Texture height
+
+            // We want a tighter hitbox.
+            // setBodySize(w, h, center)
+            const boxW = w * 0.4; // Reduced from 0.6 to 0.4 for very tight fit
+            const boxH = h * 0.9;
+            obs.setBodySize(boxW, boxH);
+
+            // For origin (0.5, 1), we need offset to align center-bottom of body with center-bottom of sprite
+            // OffsetX = (Width - BoxWidth) / 2
+            // OffsetY = Height - BoxHeight
+            obs.setOffset((w - boxW) / 2, h - boxH);
+        }
+        function startLevel2(scene) {
+            currentLevel = 2;
+
+            // Flash Effect
+            scene.cameras.main.flash(1000, 255, 255, 255);
+
+            // Update Textures
+            bgSky.setTexture('bg_sky2');
+            bgGround.setTexture('bg_ground2');
+
+            // Fix Sky Scaling (Prevent Vertical Tiling)
+            const skyTex = scene.textures.get('bg_sky2').getSourceImage();
+            const skyScale = Math.max(scene.scale.width / skyTex.width, scene.scale.height / skyTex.height);
+            bgSky.setTileScale(skyScale, skyScale);
+            // Ensure sky is centered
+            bgSky.setOrigin(0.5, 0.5);
+            bgSky.setPosition(scene.scale.width / 2, scene.scale.height / 2);
+
+            // Fix Ground Positioning for Level 2
+            const FLOOR_Y = scene.scale.height - CONFIG.floorOffset;
+            bgGround.setOrigin(0, 0); // Top-Left origin
+            bgGround.setPosition(0, FLOOR_Y); // Place top edge at hero's feet level
+
+            // Re-scale ground
+            const gTex = scene.textures.get('bg_ground2').getSourceImage();
+            // Use scale 1.0 (natural size, 400px height) to look sharp, not zoomed
+            bgGround.setTileScale(1, 1);
+            // Ensure size matches screen width
+            bgGround.setSize(scene.scale.width, gTex.height);
+
+            // Show Level Text
+            const levelText = scene.add.text(scene.scale.width / 2, scene.scale.height / 2, 'LEVEL 2', {
+                fontSize: '64px',
+                fill: '#ffffff',
+                fontFamily: 'Arial Black',
+                stroke: '#000',
+                strokeThickness: 8
+            }).setOrigin(0.5).setDepth(20);
+
+            scene.tweens.add({
+                targets: levelText,
+                scale: 1.5,
+                alpha: 0,
+                duration: 2000,
+                onComplete: () => levelText.destroy()
+            });
+
+            // Make game faster!
+            gameSpeed += 100;
+
+            // Swap Music
+            console.log("Stopping ALL sounds, Playing BGM2");
+            scene.sound.stopAll(); // NUCLEAR OPTION: Stops everything (BGM1, active SFX)
+
+            if (soundBgm2) soundBgm2.play();
+        }
+    </script>
+</body>
+
+</html>
