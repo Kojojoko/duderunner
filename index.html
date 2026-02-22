@@ -1,0 +1,1297 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>DUDE: The Panic Run</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            overflow: hidden;
+            touch-action: none;
+            /* Prevent mobile scroll/zoom */
+        }
+
+        canvas {
+            display: block;
+        }
+
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+        }
+
+        @import url('https://fonts.googleapis.com/css2?family=Bangers&family=Roboto:wght@700&display=swap');
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.min.js"></script>
+</head>
+
+<body>
+    <div id="game-container"></div>
+
+    <script>
+        // Game Configuration
+        const config = {
+            type: Phaser.AUTO,
+            scale: {
+                mode: Phaser.Scale.FIT,
+                parent: 'game-container',
+                width: 1280,
+                height: 720,
+                autoCenter: Phaser.Scale.CENTER_BOTH
+            },
+            physics: {
+                default: 'arcade',
+                arcade: {
+                    gravity: { y: 1500 },
+                    debug: false // ENABLE DEBUG TO SEE HITBOXES
+                }
+            },
+            scene: {
+                preload: preload,
+                create: create,
+                update: update
+            }
+        };
+
+        const game = new Phaser.Game(config);
+
+        // =====================================================
+        // TUNABLE CONFIGURATION - CHANGE THESE VALUES!
+        // =====================================================
+        const CONFIG = {
+            // GROUND
+            groundHeight: 609,          // Height of ground sprite (increase to make ground taller)
+            floorOffset: 30,            // Distance from bottom where floor is (hero stands here)
+
+            heroScale: 0.18,            // Hero sprite scale (increase to make hero bigger)
+            heroX: 150,                 // Hero horizontal position
+            mamithaXOffset: -30,        // Mamitha behind Hero (negative = behind)
+            heroBodyWidth: 300,         // Hero hitbox width (before scaling)
+            heroBodyHeight: 550,        // Hero hitbox height (before scaling)
+            heroOffsetX: 50,            // Hero hitbox X offset
+            heroOffsetY: 10,            // Hero hitbox Y offset (keep LOW! 0-50)
+            jumpVelocity: -900,         // Jump power (more negative = higher jump)
+
+            // OBSTACLES
+            obstacleMaxHeight: 150,      // Max obstacle height
+            obstacleMinHeight: 70,       // Min obstacle height
+
+            // SKY
+            skyTileScale: 0.5,          // Sky texture scale (increase to zoom in)
+
+            // GAME - These will be overridden by difficulty selection
+            initialSpeed: 350,          // Default starting game speed
+            speedIncrease: 20,          // Default speed increase every 10 seconds
+        };
+
+        // DIFFICULTY SETTINGS
+        const DIFFICULTY = {
+            beginner: { speed: 300, increase: 15, label: '🌱 BEGINNER', color: '#4CAF50' },
+            medium: { speed: 450, increase: 25, label: '⚡ MEDIUM', color: '#FF9800' },
+            hard: { speed: 600, increase: 40, label: '🔥 HARD', color: '#F44336' },
+            godmode: { speed: 900, increase: 80, label: '💀 GOD MODE', color: '#9C27B0' }
+        };
+        let selectedDifficulty = null;
+        let difficultyContainer;
+        // =====================================================
+
+        // Global Variables
+        let player;  // Hero (Player 1)
+        let player2; // Mamitha (Player 2)
+        let ground;
+        let bgSky;
+        let bgGround;
+        let cursors;
+        let jumpButton;
+        let wKey;    // W key for Hero jump
+        let upKey;   // Up Arrow for Mamitha jump
+        let obstacles;
+        let coins;
+        let gameSpeed = CONFIG.initialSpeed;
+        let nextSpawnTime = 0;
+        let isGameOver = false;
+        let score = 0;      // Distance score
+        let coinScore = 0;  // Mango count
+        let scoreText;
+        let coinText;
+        let gameOverContainer;
+        let currentLevel = 1; // Track level 1 or 2
+        let gameStarted = false;
+        let startContainer;
+        let isPaused = false;
+        let pauseContainer;
+        let escKey;
+
+        // Two-Player Mode
+        let isTwoPlayerMode = false;
+        let selectedPlayerMode = null;
+        let playerModeContainer;
+        let gameScene; // Store reference to Phaser scene
+
+        let selectedCharacter = null; // 'agan' or 'kural'
+        let characterSelectContainer;
+
+        // Dynamic Animation Keys for Player 1
+        let p1RunKey = 'run';
+        let p1JumpKey = 'jump';
+        let p1DeathKey = 'death';
+
+        // Sounds
+        let soundBgm;
+        let soundbgmh;
+        let soundBgm2;
+        let soundJump;
+        let soundGameOver;
+        let soundCoin;
+
+
+        function preload() {
+            // Load Hero as IMAGE (Base for Atlas) - NORMALIZED VERSION
+            this.load.image('hero_sheet', 'assets/hero_sheet_normalized.png');
+            // Load Mamitha (Player 2) - NORMALIZED VERSION
+            this.load.image('mamitha_sheet', 'assets/mamitha_sheet_normalized.png');
+
+            // Backgrounds
+            this.load.image('bg_sky', 'assets/bg_sky.png');
+            this.load.image('bg_ground', 'assets/bg_ground.png');
+            this.load.image('barricade', 'assets/obstacle_barricade.png');
+            this.load.image('metro', 'assets/obstacle_metro.png');
+            this.load.image('mango', 'assets/mango.png'); // Mango as Coin
+
+            // Level 2 Assets
+            this.load.image('bg_sky2', 'assets/bg_sky2.png');
+            this.load.image('bg_ground2', 'assets/bg_ground2.png');
+            this.load.image('car', 'assets/obstacle_car.png');
+            this.load.image('bike', 'assets/obstacle_bike.png');
+            this.load.image('logo', 'assets/logo.png');
+
+            // Audio
+            this.load.audio('bgm', 'audio/Oorum_Blood.wav');
+            this.load.audio('bgmh', 'audio/bg_audio.mp3');
+            this.load.audio('bgm2', 'audio/bg2.mp3');
+            this.load.audio('jump', 'audio/jump.mp3');
+            this.load.audio('gameover', 'audio/game-over.mp3');
+        }
+
+        // Check for file protocol
+        if (window.location.protocol === 'file:') {
+            alert("⚠️ SECURITY WARNING ⚠️\n\nThis game CANNOT run directly from the folder due to browser security (CORS).\n\nPlease run 'play_game.bat' to play!");
+
+            // Add a visual warning on screen
+            window.addEventListener('load', () => {
+                const div = document.createElement('div');
+                div.style.position = 'fixed';
+                div.style.top = '0'; div.style.left = '0'; div.style.width = '100%'; div.style.height = '100%';
+                div.style.backgroundColor = 'rgba(255,0,0,0.9)';
+                div.style.color = 'white'; div.style.display = 'flex'; div.style.justifyContent = 'center'; div.style.alignItems = 'center';
+                div.style.fontSize = '24px'; div.style.zIndex = '9999'; div.style.textAlign = 'center';
+                div.innerText = "GAME STOPPED\n\nYou are opening this file directly.\nPlease double-click 'play_game.bat' instead!";
+                document.body.appendChild(div);
+            });
+        }
+
+        function create() {
+            gameScene = this; // Store scene reference for later use
+
+            // Reset Game State
+            selectedCharacter = null;
+            selectedPlayerMode = null;
+            isTwoPlayerMode = false;
+            p1RunKey = 'run';
+            p1JumpKey = 'jump';
+            p1DeathKey = 'death';
+
+
+            const width = this.scale.width;
+            const height = this.scale.height;
+
+            isGameOver = false;
+            gameSpeed = CONFIG.initialSpeed;
+            score = 0;
+
+            // --- Single Source of Truth for Ground Level ---
+            // This is the exact Y pixel where the floor surface starts
+            const FLOOR_Y = height - CONFIG.floorOffset;
+
+            // --- Dynamic Atlas Generation ---
+            if (this.textures.exists('hero_sheet')) {
+                const sheet = this.textures.get('hero_sheet');
+                try {
+                    sheet.add('run0', 0, 0, 0, 439, 878);
+                    sheet.add('run1', 0, 439, 0, 439, 878);
+                    sheet.add('run2', 0, 878, 0, 439, 878);
+                    sheet.add('run3', 0, 1317, 0, 439, 878);
+                    sheet.add('jump', 0, 439, 878, 439, 878);     // Row 2 position 1
+                    sheet.add('death', 0, 878, 878, 439, 878);    // Row 2 position 2
+                } catch (e) {
+                    console.error("Error adding frames to texture:", e);
+                }
+
+                this.anims.create({
+                    key: 'run',
+                    frames: [
+                        { key: 'hero_sheet', frame: 'run0' },
+                        { key: 'hero_sheet', frame: 'run1' },
+                        { key: 'hero_sheet', frame: 'run2' },
+                        { key: 'hero_sheet', frame: 'run3' }
+                    ],
+                    frameRate: 10,
+                    repeat: -1
+                });
+                this.anims.create({
+                    key: 'jump',
+                    frames: [{ key: 'hero_sheet', frame: 'jump' }],
+                    frameRate: 10
+                });
+                this.anims.create({
+                    key: 'death',
+                    frames: [{ key: 'hero_sheet', frame: 'death' }],
+                    frameRate: 10
+                });
+            } else {
+                // Fallback
+                const g = this.make.graphics({ x: 0, y: 0 }).fillStyle(0x00ff00).fillRect(0, 0, 64, 96);
+                g.generateTexture('hero_sheet', 64, 96);
+                this.anims.create({ key: 'run', frames: [{ key: 'hero_sheet' }], repeat: -1 });
+                this.anims.create({ key: 'jump', frames: [{ key: 'hero_sheet' }] });
+            }
+
+            // --- Mamitha (Player 2) Atlas Generation ---
+            if (this.textures.exists('mamitha_sheet')) {
+                const sheet2 = this.textures.get('mamitha_sheet');
+                try {
+                    sheet2.add('run0', 0, 0, 0, 439, 878);
+                    sheet2.add('run1', 0, 439, 0, 439, 878);
+                    sheet2.add('run2', 0, 878, 0, 439, 878);
+                    sheet2.add('run3', 0, 1317, 0, 439, 878);
+                    sheet2.add('jump', 0, 439, 878, 439, 878);  // Row 2 jump frame
+                    sheet2.add('death', 0, 878, 878, 439, 878);  // Row 2 death frame
+                } catch (e) {
+                    console.error("Error adding frames to mamitha texture:", e);
+                }
+
+                this.anims.create({
+                    key: 'mamitha_run',
+                    frames: [
+                        { key: 'mamitha_sheet', frame: 'run0' },
+                        { key: 'mamitha_sheet', frame: 'run1' },
+                        { key: 'mamitha_sheet', frame: 'run2' },
+                        { key: 'mamitha_sheet', frame: 'run3' }
+                    ],
+                    frameRate: 10,
+                    repeat: -1
+                });
+                this.anims.create({
+                    key: 'mamitha_jump',
+                    frames: [{ key: 'mamitha_sheet', frame: 'jump' }],
+                    frameRate: 10
+                });
+                this.anims.create({
+                    key: 'mamitha_death',
+                    frames: [{ key: 'mamitha_sheet', frame: 'death' }],
+                    frameRate: 10
+                });
+            }
+
+            // Create placeholder textures if missing
+            if (!this.textures.exists('bg_sky')) {
+                const g = this.make.graphics({ x: 0, y: 0 }).fillStyle(0x87CEEB).fillRect(0, 0, 64, 64);
+                g.generateTexture('bg_sky', 64, 64);
+            }
+            if (!this.textures.exists('bg_ground')) {
+                const g = this.make.graphics({ x: 0, y: 0 }).fillStyle(0x8B4513).fillRect(0, 0, 64, 64);
+                g.generateTexture('bg_ground', 64, 64);
+            }
+            if (!this.textures.exists('barricade')) {
+                const g = this.make.graphics({ x: 0, y: 0 }).fillStyle(0xFFA500).fillRect(0, 0, 40, 40);
+                g.generateTexture('barricade', 40, 40);
+            }
+            if (!this.textures.exists('metro')) {
+                const g = this.make.graphics({ x: 0, y: 0 }).fillStyle(0x808080).fillRect(0, 0, 60, 40);
+                g.generateTexture('metro', 60, 40);
+            }
+
+            // --- Backgrounds ---
+            bgSky = this.add.tileSprite(width / 2, height / 2, width, height, 'bg_sky');
+            bgSky.setScrollFactor(0);
+            const skyTex = this.textures.get('bg_sky').getSourceImage();
+            if (skyTex.width > 1000) bgSky.setTileScale(CONFIG.skyTileScale, CONFIG.skyTileScale);
+
+            // --- Visual Ground ---
+            // Align bottom-left (0, 1) to screen bottom
+            bgGround = this.add.tileSprite(0, height, width, CONFIG.groundHeight, 'bg_ground');
+            bgGround.setOrigin(0, 1);
+            bgGround.setScrollFactor(0);
+            bgGround.setDepth(5);
+            const gTex = this.textures.get('bg_ground').getSourceImage();
+            bgGround.setTileScale(CONFIG.groundHeight / gTex.height, CONFIG.groundHeight / gTex.height);
+
+            // --- Physics Ground ---
+            // Create texture
+            const floorHeight = 100;
+            const floorGraphics = this.make.graphics({ x: 0, y: 0 });
+            floorGraphics.fillStyle(0x0000ff, 0.5); // Blue debug
+            floorGraphics.fillRect(0, 0, 100, floorHeight);
+            floorGraphics.generateTexture('floor_tex', 100, floorHeight);
+            floorGraphics.destroy();
+
+            ground = this.physics.add.staticGroup();
+
+            // Create floor at FLOOR_Y with Top-Center origin
+            // This ensures the top edge is exactly at FLOOR_Y
+            const floor = ground.create(width / 2, FLOOR_Y, 'floor_tex');
+            floor.setOrigin(0.5, 0);
+            floor.setDisplaySize(width * 2, floorHeight);
+            floor.refreshBody();
+            floor.setAlpha(0.5); // Keep visible for debug
+
+            // --- Player ---
+            let playerKey = 'hero_sheet';
+
+            // Spawn player with feet at FLOOR_Y
+            // We use origin (0.5, 1) so Y represents the feet position
+            player = this.physics.add.sprite(CONFIG.heroX, FLOOR_Y - 50, playerKey, 'run0');
+            player.setOrigin(0.5, 1);
+            player.setScale(CONFIG.heroScale);
+            player.setDepth(10);
+
+            // Adjust physics body to match visual sprite
+            player.setCollideWorldBounds(true);
+
+            // Manual body sizing to fit the visible character within the sprite
+            player.body.setSize(CONFIG.heroBodyWidth, CONFIG.heroBodyHeight);
+
+            // Calculate offset based on actual frame size (439x878) scaled
+            const frameWidth = 439 * CONFIG.heroScale;   // Actual frame width after scaling
+            const frameHeight = 878 * CONFIG.heroScale;  // Actual frame height after scaling
+
+            // Center horizontally, align to bottom
+            const offsetX = (frameWidth - CONFIG.heroBodyWidth * CONFIG.heroScale) / 2 / CONFIG.heroScale;
+            const offsetY = (frameHeight - CONFIG.heroBodyHeight * CONFIG.heroScale) / CONFIG.heroScale;
+
+            player.setOffset(offsetX, offsetY);
+
+            this.physics.add.collider(player, ground);
+
+            // Start animation
+            player.play('run');
+
+            // Player 2 will be created dynamically in startGame() when two-player mode is selected
+
+            // --- Obstacles ---
+            obstacles = this.physics.add.group();
+            obstacles.setDepth(9);
+            this.physics.add.collider(player, obstacles, hitObstacle, null, this);
+            this.physics.add.collider(obstacles, ground);
+
+            // Player 2 obstacle collision
+            if (isTwoPlayerMode && player2) {
+                this.physics.add.collider(player2, obstacles, hitObstacle, null, this);
+            }
+
+            // --- Coins (Mangoes) ---
+            coins = this.physics.add.group();
+            coins.setDepth(9);
+            this.physics.add.overlap(player, coins, collectCoin, null, this);
+
+            // Player 2 coin collection
+            if (isTwoPlayerMode && player2) {
+                this.physics.add.overlap(player2, coins, collectCoin, null, this);
+            }
+
+            // --- Inputs ---
+            cursors = this.input.keyboard.createCursorKeys();
+            jumpButton = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+            // Two-Player Controls
+            wKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.W);      // Hero jump
+            upKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.UP);   // Mamitha jump
+
+            this.input.on('pointerdown', () => {
+                if (!gameStarted) startGame();
+                else if (!isGameOver) jump();  // This will affect player 1 only
+            });
+
+            this.input.keyboard.on('keydown', (event) => {
+                if (!gameStarted && event.code === 'Space') startGame();
+                else if (isGameOver && (event.code === 'Space' || event.code === 'Enter')) restartGame();
+                else if (gameStarted && !isGameOver && event.code === 'Escape') togglePause();
+            });
+
+            escKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
+
+            // --- UI ---
+            scoreText = this.add.text(20, 20, 'Distance: 0m', {
+                fontSize: '32px', fill: '#ffffff', fontFamily: 'Arial Black', stroke: '#000', strokeThickness: 5
+            }).setScrollFactor(0).setDepth(10);
+
+            coinText = this.add.text(width - 20, 20, 'Mangoes: 0', {
+                fontSize: '32px', fill: '#FFD700', fontFamily: 'Arial Black', stroke: '#000', strokeThickness: 5
+            }).setOrigin(1, 0).setScrollFactor(0).setDepth(10);
+
+            gameOverContainer = this.add.container(width / 2, height / 2);
+            gameOverContainer.setDepth(100);
+            gameOverContainer.setVisible(false);
+            const bgRect = this.add.rectangle(0, 0, 400, 250, 0x000000, 0.85);
+            const goText = this.add.text(0, -40, 'GAME OVER', { fontSize: '36px', fill: '#ff0055', fontFamily: 'Arial Black' }).setOrigin(0.5);
+            const tipText = this.add.text(0, 40, 'Tap to Retry', { fontSize: '24px', fill: '#ffffff' }).setOrigin(0.5);
+            const restartZone = this.add.zone(0, 0, 400, 250).setInteractive();
+            restartZone.on('pointerdown', restartGame);
+            gameOverContainer.add([bgRect, goText, tipText, restartZone]);
+
+            // --- Pause Screen ---
+            pauseContainer = this.add.container(width / 2, height / 2);
+            pauseContainer.setDepth(100);
+            pauseContainer.setVisible(false);
+
+            const pauseBg = this.add.rectangle(0, 0, width, height, 0x000000, 0.6);
+            const pauseText = this.add.text(0, -20, 'PAUSED', {
+                fontSize: '64px', fill: '#ffffff', fontFamily: 'Arial Black', stroke: '#000', strokeThickness: 8
+            }).setOrigin(0.5);
+            const pauseSubText = this.add.text(0, 50, 'Press ESC to Resume', {
+                fontSize: '24px', fill: '#cccccc', fontFamily: 'Arial'
+            }).setOrigin(0.5);
+
+            pauseContainer.add([pauseBg, pauseText, pauseSubText]);
+
+            // Timer
+            this.time.addEvent({
+                delay: 10000,
+                callback: () => { if (!isGameOver && !isPaused) gameSpeed += CONFIG.speedIncrease; },
+                loop: true
+            });
+
+            // --- Audio Setup ---
+            try {
+                soundJump = this.sound.add('jump', { volume: 0.5 });
+                soundGameOver = this.sound.add('gameover', { volume: 0.8 });
+                soundBgm = this.sound.add('bgm', { volume: 2, loop: true });
+                soundbgmh = this.sound.add('bgmh', { volume: 2, loop: true });
+                soundBgm2 = this.sound.add('bgm2', { volume: 0.8, loop: true });
+            } catch (e) { console.warn("Audio missing"); }
+
+            // --- Player Mode Selection Screen (1 or 2 Players) ---
+            playerModeContainer = this.add.container(width / 2, height / 2);
+            playerModeContainer.setDepth(70);
+
+            const modeBg = this.add.rectangle(0, 0, 500, 450, 0x000000, 0.9);
+            modeBg.setStrokeStyle(3, 0xffffff);
+
+            const modeLogo = this.add.image(0, -160, 'logo');
+            modeLogo.setScale(0.4);
+
+            const modeTitle = this.add.text(0, -70, 'SELECT PLAYERS', {
+                fontSize: '32px', fill: '#ffffff', fontFamily: 'Arial Black', stroke: '#000', strokeThickness: 4
+            }).setOrigin(0.5);
+
+            // 1 Player Button
+            const btn1Player = this.add.rectangle(0, 20, 350, 70, 0x333333, 1);
+            btn1Player.setStrokeStyle(2, 0x4CAF50);
+            btn1Player.setInteractive({ useHandCursor: true });
+
+            const btn1Text = this.add.text(0, 10, '👤 1 PLAYER', {
+                fontSize: '28px', fill: '#4CAF50', fontFamily: 'Arial Black'
+            }).setOrigin(0.5);
+
+            const btn1Info = this.add.text(0, 38, 'Hero Only', {
+                fontSize: '16px', fill: '#aaaaaa', fontFamily: 'Arial'
+            }).setOrigin(0.5);
+
+            // 2 Players Button
+            const btn2Player = this.add.rectangle(0, 120, 350, 70, 0x333333, 1);
+            btn2Player.setStrokeStyle(2, 0xFF9800);
+            btn2Player.setInteractive({ useHandCursor: true });
+
+            const btn2Text = this.add.text(0, 110, '👥 2 PLAYERS', {
+                fontSize: '28px', fill: '#FF9800', fontFamily: 'Arial Black'
+            }).setOrigin(0.5);
+
+            const btn2Info = this.add.text(0, 138, 'Hero + Mamitha | W + ↑', {
+                fontSize: '16px', fill: '#aaaaaa', fontFamily: 'Arial'
+            }).setOrigin(0.5);
+
+            // Hover effects
+            btn1Player.on('pointerover', () => {
+                btn1Player.setFillStyle(0x4CAF50, 0.3);
+                btn1Text.setScale(1.1);
+            });
+            btn1Player.on('pointerout', () => {
+                btn1Player.setFillStyle(0x333333, 1);
+                btn1Text.setScale(1);
+            });
+
+            btn2Player.on('pointerover', () => {
+                btn2Player.setFillStyle(0xFF9800, 0.3);
+                btn2Text.setScale(1.1);
+            });
+            btn2Player.on('pointerout', () => {
+                btn2Player.setFillStyle(0x333333, 1);
+                btn2Text.setScale(1);
+            });
+
+            // Click handlers
+            btn1Player.on('pointerdown', () => {
+                selectPlayerMode(1);
+            });
+
+            btn2Player.on('pointerdown', () => {
+                selectPlayerMode(2);
+            });
+
+            playerModeContainer.add([modeBg, modeLogo, modeTitle,
+                btn1Player, btn1Text, btn1Info,
+                btn2Player, btn2Text, btn2Info]);
+            playerModeContainer.sendToBack(modeBg);
+
+            // --- Difficulty Selection Screen ---
+            difficultyContainer = this.add.container(width / 2, height / 2);
+            difficultyContainer.setDepth(60);
+            difficultyContainer.setVisible(false); // Hidden until player mode is selected
+
+            // Taller background to fit logo + buttons comfortable
+            const diffBg = this.add.rectangle(0, 0, 500, 600, 0x000000, 0.9);
+            diffBg.setStrokeStyle(3, 0xffffff);
+
+            // Logo at the top
+            const diffLogo = this.add.image(0, -230, 'logo');
+            diffLogo.setScale(0.4);
+
+            const diffTitle = this.add.text(0, -140, 'SELECT DIFFICULTY', {
+                fontSize: '28px', fill: '#ffffff', fontFamily: 'Arial Black', stroke: '#000', strokeThickness: 4
+            }).setOrigin(0.5);
+
+            const difficulties = ['beginner', 'medium', 'hard', 'godmode'];
+            // Increase spacing: 80px gaps
+            const buttonY = [-55, 25, 105, 185];
+            const diffButtons = [];
+
+            difficulties.forEach((diff, index) => {
+                // Taller button (65px)
+                const btnBg = this.add.rectangle(0, buttonY[index], 350, 65, 0x333333, 1);
+                btnBg.setStrokeStyle(2, Phaser.Display.Color.HexStringToColor(DIFFICULTY[diff].color).color);
+                btnBg.setInteractive({ useHandCursor: true });
+
+                // Text offset slightly up
+                const btnText = this.add.text(0, buttonY[index] - 10, DIFFICULTY[diff].label, {
+                    fontSize: '24px', fill: DIFFICULTY[diff].color, fontFamily: 'Arial Black'
+                }).setOrigin(0.5);
+
+                // Speed info offset slightly down
+                const speedInfo = this.add.text(0, buttonY[index] + 18, `Speed: ${DIFFICULTY[diff].speed}`, {
+                    fontSize: '14px', fill: '#aaaaaa', fontFamily: 'Arial'
+                }).setOrigin(0.5);
+
+                // Hover effects
+                btnBg.on('pointerover', () => {
+                    btnBg.setFillStyle(Phaser.Display.Color.HexStringToColor(DIFFICULTY[diff].color).color, 0.3);
+                    btnText.setScale(1.1);
+                });
+                btnBg.on('pointerout', () => {
+                    btnBg.setFillStyle(0x333333, 1);
+                    btnText.setScale(1);
+                });
+
+                // Click to select difficulty
+                btnBg.on('pointerdown', () => {
+                    selectDifficulty(diff);
+                });
+
+                difficultyContainer.add([btnBg, btnText, speedInfo]);
+                diffButtons.push(btnBg);
+            });
+
+            difficultyContainer.add([diffBg, diffLogo, diffTitle]);
+            difficultyContainer.sendToBack(diffBg);
+
+            // --- Character Selection Screen (Single Player Only) ---
+            characterSelectContainer = this.add.container(width / 2, height / 2);
+            characterSelectContainer.setDepth(65);
+            characterSelectContainer.setVisible(false);
+
+            const charBg = this.add.rectangle(0, 0, 600, 500, 0x000000, 0.9);
+            charBg.setStrokeStyle(3, 0xffffff);
+
+            const charLogo = this.add.image(0, -180, 'logo');
+            charLogo.setScale(0.4);
+
+            const charTitle = this.add.text(0, -100, 'SELECT CHARACTER', {
+                fontSize: '32px', fill: '#ffff00', fontFamily: 'Arial Black', stroke: '#000', strokeThickness: 4
+            }).setOrigin(0.5);
+
+            // Character buttons
+            const btnAgan = this.add.rectangle(0, -10, 400, 80, 0x333333, 1);
+            btnAgan.setStrokeStyle(3, 0x4CAF50);
+            btnAgan.setInteractive({ useHandCursor: true });
+
+            const btnAganText = this.add.text(0, -20, '🏃 AGAN (Hero)', {
+                fontSize: '28px', fill: '#4CAF50', fontFamily: 'Arial Black'
+            }).setOrigin(0.5);
+
+            const btnAganInfo = this.add.text(0, 10, 'Play as the green hero', {
+                fontSize: '16px', fill: '#aaaaaa', fontFamily: 'Arial'
+            }).setOrigin(0.5);
+
+            const btnKural = this.add.rectangle(0, 110, 400, 80, 0x333333, 1);
+            btnKural.setStrokeStyle(3, 0xFF5722);
+            btnKural.setInteractive({ useHandCursor: true });
+
+            const btnKuralText = this.add.text(0, 100, '🏃‍♀️ KURAL (Mamitha)', {
+                fontSize: '28px', fill: '#FF5722', fontFamily: 'Arial Black'
+            }).setOrigin(0.5);
+
+            const btnKuralInfo = this.add.text(0, 130, 'Play as the red heroine', {
+                fontSize: '16px', fill: '#aaaaaa', fontFamily: 'Arial'
+            }).setOrigin(0.5);
+
+            // Hover effects - Agan
+            btnAgan.on('pointerover', () => {
+                btnAgan.setFillStyle(0x4CAF50, 0.3);
+                btnAganText.setScale(1.1);
+            });
+            btnAgan.on('pointerout', () => {
+                btnAgan.setFillStyle(0x333333, 1);
+                btnAganText.setScale(1);
+            });
+
+            // Hover effects - Kural
+            btnKural.on('pointerover', () => {
+                btnKural.setFillStyle(0xFF5722, 0.3);
+                btnKuralText.setScale(1.1);
+            });
+            btnKural.on('pointerout', () => {
+                btnKural.setFillStyle(0x333333, 1);
+                btnKuralText.setScale(1);
+            });
+
+            // Click handlers
+            btnAgan.on('pointerdown', () => {
+                selectCharacter('agan');
+            });
+
+            btnKural.on('pointerdown', () => {
+                selectCharacter('kural');
+            });
+
+            characterSelectContainer.add([charBg, charLogo, charTitle,
+                btnAgan, btnAganText, btnAganInfo,
+                btnKural, btnKuralText, btnKuralInfo]);
+            characterSelectContainer.sendToBack(charBg);
+
+            // --- Start Screen (hidden initially, shown after difficulty selection) ---
+            startContainer = this.add.container(width / 2, height / 2);
+            startContainer.setDepth(50);
+            startContainer.setVisible(false);
+
+            const logoImg = this.add.image(0, -50, 'logo');
+            logoImg.setScale(0.5);
+
+            const startMsg = this.add.text(0, 120, 'Press SPACE to Play', {
+                fontSize: '48px', fill: '#ffffff', fontFamily: 'Arial Black', stroke: '#000', strokeThickness: 6
+            }).setOrigin(0.5);
+
+            const diffLabel = this.add.text(0, 180, '', {
+                fontSize: '24px', fill: '#ffffff', fontFamily: 'Arial Black', stroke: '#000', strokeThickness: 4
+            }).setOrigin(0.5);
+            diffLabel.name = 'diffLabel';
+
+            this.tweens.add({
+                targets: startMsg,
+                scale: 1.1,
+                duration: 800,
+                yoyo: true,
+                repeat: -1
+            });
+
+            startContainer.add([logoImg, startMsg, diffLabel]);
+
+            // Initial State: Paused (Game hasn't started)
+            gameStarted = false;
+            scoreText.setVisible(false);
+            coinText.setVisible(false);
+
+            // Player Idle
+            if (player.anims.exists('run')) {
+                player.anims.pause();
+                player.setFrame(0);
+            }
+            if (isTwoPlayerMode && player2 && player2.anims.exists('mamitha_run')) {
+                player2.anims.pause();
+                player2.setFrame(0);
+            }
+
+            this.scale.on('resize', resize, this);
+
+            // FIT mode doesn't always fire resize event on start, so we call it manually
+            // to ensure floor and background are positioned correctly for 1280x720
+            resize.call(this, { width: this.scale.width, height: this.scale.height });
+
+            // Initialize Mobile Controls (Touch Zones & Pause Button)
+            createMobileControls(this);
+        }
+
+        function selectPlayerMode(mode) {
+            selectedPlayerMode = mode;
+            isTwoPlayerMode = (mode === 2);
+
+            playerModeContainer.setVisible(false);
+
+            if (mode === 1) {
+                // Show character selection for single player
+                characterSelectContainer.setVisible(true);
+            } else {
+                // Two-player mode: Default to Agan (Hero) + Kural (Mamitha)
+                selectCharacter('agan');
+            }
+
+            console.log(`Player mode selected: ${mode} player(s)`);
+        }
+
+        function selectCharacter(char) {
+            selectedCharacter = char;
+            console.log("Character selected:", char);
+
+            // Set dynamic animation keys
+            if (char === 'kural') {
+                p1RunKey = 'mamitha_run';
+                p1JumpKey = 'mamitha_jump';
+                p1DeathKey = 'mamitha_death';
+
+                // Update idle sprite immediately
+                player.setTexture('mamitha_sheet');
+                player.play('mamitha_run');
+                player.anims.pause();
+            } else {
+                p1RunKey = 'run';
+                p1JumpKey = 'jump';
+                p1DeathKey = 'death';
+
+                // Update idle sprite immediately
+                player.setTexture('hero_sheet');
+                player.play('run');
+                player.anims.pause();
+            }
+
+            characterSelectContainer.setVisible(false);
+            difficultyContainer.setVisible(true);
+        }
+
+        function selectDifficulty(diff) {
+            selectedDifficulty = diff;
+
+            // Apply difficulty settings
+            CONFIG.initialSpeed = DIFFICULTY[diff].speed;
+            CONFIG.speedIncrease = DIFFICULTY[diff].increase;
+            gameSpeed = CONFIG.initialSpeed;
+
+            // Hide difficulty container, show start screen
+            difficultyContainer.setVisible(false);
+            startContainer.setVisible(true);
+
+            // Update difficulty label on start screen
+            const diffLabel = startContainer.list.find(item => item.name === 'diffLabel');
+            if (diffLabel) {
+                diffLabel.setText(DIFFICULTY[diff].label);
+                diffLabel.setFill(DIFFICULTY[diff].color);
+            }
+        }
+
+        function createPlayer2(scene) {
+            // Create Player 2 (Mamitha) dynamically when game starts
+            if (player2) return; // Already exists
+
+            const width = scene.scale.width;
+            const height = scene.scale.height;
+            const FLOOR_Y = height - CONFIG.floorOffset;
+
+            player2 = scene.physics.add.sprite(CONFIG.heroX + CONFIG.mamithaXOffset, FLOOR_Y - 50, 'mamitha_sheet', 'run0');
+            player2.setOrigin(0.5, 1);
+            player2.setScale(CONFIG.heroScale);
+            player2.setDepth(11);  // Behind hero (hero is 10)
+            player2.setCollideWorldBounds(true);
+
+            // Same physics body and offset calculation as hero
+            player2.body.setSize(CONFIG.heroBodyWidth, CONFIG.heroBodyHeight);
+
+            // Calculate offset based on actual frame size (439x878) scaled
+            const frameWidth = 439 * CONFIG.heroScale;
+            const frameHeight = 878 * CONFIG.heroScale;
+            const offsetX = (frameWidth - CONFIG.heroBodyWidth * CONFIG.heroScale) / 2 / CONFIG.heroScale;
+            const offsetY = (frameHeight - CONFIG.heroBodyHeight * CONFIG.heroScale) / CONFIG.heroScale;
+
+            player2.setOffset(offsetX, offsetY);
+
+            scene.physics.add.collider(player2, ground);
+            scene.physics.add.collider(player2, obstacles, hitObstacle, null, scene);
+            scene.physics.add.overlap(player2, coins, collectCoin, null, scene);
+
+            player2.play('mamitha_run');
+            console.log("Player 2 (Mamitha) created at position:", player2.x, player2.y);
+        }
+
+        function startGame() {
+            if (gameStarted) return;
+            if (!selectedDifficulty) return; // Must select difficulty first
+            gameStarted = true;
+
+            startContainer.setVisible(false);
+            scoreText.setVisible(true);
+            coinText.setVisible(true);
+
+            player.anims.resume();
+
+            // Create and resume player 2 if in two-player mode
+            if (isTwoPlayerMode) {
+                if (!player2) {
+                    createPlayer2(gameScene);  // Use stored scene reference
+                }
+                if (player2) {
+                    player2.anims.resume();
+                }
+            }
+
+            if (soundBgm && soundBgm.isPlaying) soundBgm.stop();
+            if (soundbgmh && soundbgmh.isPlaying) soundbgmh.stop();
+
+            // Play correct BGM based on selected character (1P) or default (2P)
+            if (selectedCharacter === 'kural') {
+                if (soundBgm) soundBgm.play(); // Oorum_Blood for Kural
+            } else {
+                if (soundbgmh) soundbgmh.play(); // bgm.mp3 for Hero (Agan) & 2P Default
+            }
+        }
+
+        function update(time, delta) {
+            if (!gameStarted || isGameOver || isPaused) return;
+
+            const dt = delta / 1000;
+
+            // Scroll
+            bgSky.tilePositionX += 20 * dt;
+            bgGround.tilePositionX += gameSpeed * dt * (1 / bgGround.tileScaleX);
+
+            // --- Player 1 (Hero) Animation and Input ---
+            const onGround = player.body.touching.down || player.body.blocked.down;
+
+            if (onGround) {
+                // On ground - play run animation if not already running
+                if (!player.anims.isPlaying || player.anims.currentAnim?.key === p1JumpKey) {
+                    player.play(p1RunKey);
+                }
+                // Handle jump input - W key or Space
+                if (wKey.isDown || cursors.space.isDown) {
+                    jump();
+                }
+            } else {
+                // In air - show jump frame (static, not animated)
+                if (player.anims.currentAnim?.key !== p1JumpKey) {
+                    player.play(p1JumpKey);
+                }
+            }
+
+            // --- Player 2 (Mamitha) Animation and Input ---
+            if (isTwoPlayerMode && player2) {
+                const onGround2 = player2.body.touching.down || player2.body.blocked.down;
+
+                if (onGround2) {
+                    // On ground - play run animation
+                    if (!player2.anims.isPlaying || player2.anims.currentAnim?.key === 'mamitha_jump') {
+                        player2.play('mamitha_run');
+                    }
+                    // Handle jump input - Up Arrow key
+                    if (upKey.isDown) {
+                        jump2();
+                    }
+                } else {
+                    // In air - show jump frame
+                    if (player2.anims.currentAnim?.key !== 'mamitha_jump') {
+                        player2.play('mamitha_jump');
+                    }
+                }
+            }
+
+            // Score
+            score += gameSpeed * dt * 0.05;
+            scoreText.setText('Distance: ' + Math.floor(score) + 'm');
+
+            // Spawning
+            if (time > nextSpawnTime) {
+                spawnObstacle(this);
+                const minTime = Math.max(800, 2500 - gameSpeed);
+                nextSpawnTime = time + Phaser.Math.Between(minTime, minTime + 1000);
+            }
+
+            // Cleanup
+            obstacles.children.each(o => {
+                if (o.x < -100) o.destroy();
+            });
+            coins.children.each(c => {
+                if (c.x < -100) c.destroy();
+            });
+
+            // Randomly spawn coins
+            if (Phaser.Math.Between(0, 100) > 98) {
+                spawnCoin(this);
+            }
+
+            // Level 2 Transition
+            if (currentLevel === 1 && score >= 1000) {
+                startLevel2(this);
+            }
+        }
+
+
+
+
+        function jump() {
+            // Check both touching AND blocked for reliable ground detection
+            const onGround = player.body.touching.down || player.body.blocked.down;
+            if (onGround) {
+                player.setVelocityY(CONFIG.jumpVelocity);
+                if (soundJump) soundJump.play();
+            }
+        }
+
+        function jump2() {
+            // Player 2 (Mamitha) jump function
+            if (!player2) return;
+            const onGround2 = player2.body.touching.down || player2.body.blocked.down;
+            if (onGround2) {
+                player2.setVelocityY(CONFIG.jumpVelocity);
+                if (soundJump) soundJump.play({ volume: 0.5, rate: 1.1 }); // Slightly different pitch
+            }
+        }
+
+        function spawnCoin(scene) {
+            const width = scene.scale.width;
+            const height = scene.scale.height;
+            const FLOOR_Y = height - CONFIG.floorOffset;
+
+            // Decide Height: Ground or Air (above obstacle height)
+            // Air spawn: FLOOR_Y - 150 (jump height approx)
+            // Ground spawn: FLOOR_Y - 40
+            const isAir = Phaser.Math.Between(0, 100) > 50;
+            const spawnY = isAir ? FLOOR_Y - 200 : FLOOR_Y - 50;
+
+            // Don't spawn too close to existing obstacles/coins to prevent clutter
+            // (Simple check: just spawn off screen)
+            const x = width + Phaser.Math.Between(100, 400);
+
+            const coin = coins.create(x, spawnY, 'mango');
+            coin.setOrigin(0.5, 0.5);
+            coin.setScale(0.12); // Tune size as needed
+
+            // Physics
+            coin.body.allowGravity = false;
+            coin.setImmovable(true);
+            coin.setVelocityX(-gameSpeed);
+
+            // Spin animation
+            const tween = scene.tweens.add({
+                targets: coin,
+                angle: 360,
+                duration: 1000,
+                repeat: -1,
+                ease: 'Linear'
+            });
+            coin.setData('tween', tween); // Store tween to stop it later
+        }
+
+        function collectCoin(player, coin) {
+            coin.destroy();
+
+            // Play Sound (using jump sound pitch shifted or if we had a specific one)
+            // For now, no specific coin sound, maybe just log or create a beep context if possible. 
+            // Or reuse jump sound very quietly
+            if (soundJump) soundJump.play({ volume: 0.2, rate: 2.0 }); // High pitch beep
+
+            coinScore += 10;
+            coinText.setText('Mangoes: ' + coinScore);
+
+            // Visual Pop
+            const scorePopup = this.add.text(player.x, player.y - 50, '+10', {
+                fontSize: '24px', fill: '#FFD700', stroke: '#000', strokeThickness: 3
+            }).setOrigin(0.5);
+
+            this.tweens.add({
+                targets: scorePopup,
+                y: player.y - 100,
+                alpha: 0,
+                duration: 800,
+                onComplete: () => scorePopup.destroy()
+            });
+        }
+
+
+
+        function hitObstacle(hitPlayer, obstacle) {
+            if (isGameOver) return;
+            isGameOver = true;
+            this.physics.pause();
+
+            if (soundBgm) soundBgm.stop();
+            if (soundBgm2) soundBgm2.stop();
+            if (soundGameOver) soundGameOver.play();
+
+            // Play death animation for the player who got hit
+            if (hitPlayer === player) {
+                player.play(p1DeathKey);
+            } else if (hitPlayer === player2) {
+                player2.play('mamitha_death');
+            }
+
+            // Also play death animation for the other player (both die together)
+            if (isTwoPlayerMode) {
+                if (hitPlayer === player && player2) {
+                    player2.play('mamitha_death');
+                } else if (hitPlayer === player2 && player) {
+                    player.play(p1DeathKey);
+                }
+            }
+
+            this.cameras.main.shake(500, 0.05);
+
+            // Show game over screen after a brief delay to show death animation
+            this.time.delayedCall(500, () => {
+                gameOverContainer.setVisible(true);
+            });
+        }
+
+        function restartGame() {
+            location.reload();
+        }
+
+        function resize(gameSize) {
+            const width = gameSize.width;
+            const height = gameSize.height;
+            const FLOOR_Y = height - CONFIG.floorOffset;
+
+            this.physics.world.setBounds(0, 0, width, height);
+
+            bgSky.setSize(width, height);
+            bgSky.setPosition(width / 2, height / 2);
+
+            // Ground from CONFIG
+            bgGround.setSize(width, CONFIG.groundHeight);
+            bgGround.setPosition(0, height);
+
+            if (ground) {
+                ground.clear(true, true);
+                const floorHeight = 100;
+                // Create floor at FLOOR_Y with Top-Center origin
+                const floor = ground.create(width / 2, FLOOR_Y, 'floor_tex');
+                floor.setOrigin(0.5, 0);
+                floor.setDisplaySize(width * 2, floorHeight);
+                floor.refreshBody();
+                floor.setAlpha(0.5);
+            }
+
+            if (gameOverContainer) gameOverContainer.setPosition(width / 2, height / 2);
+
+            if (player && player.y > height) {
+                player.y = FLOOR_Y - 50;
+                player.setVelocity(0, 0);
+            }
+        }
+
+        function spawnObstacle(scene) {
+            const width = scene.scale.width;
+            const height = scene.scale.height;
+            const FLOOR_Y = height - CONFIG.floorOffset;
+
+            const type = Phaser.Math.Between(1, 100);
+            let key = 'barricade';
+
+            if (currentLevel === 2) {
+                // Level 2: Car and Bike
+                key = (type > 50) ? 'car' : 'bike';
+            } else {
+                // Level 1: Metro and Barricade
+                key = (type > 60) ? 'metro' : 'barricade';
+            }
+
+            if (!scene.textures.exists(key)) key = 'barricade';
+
+            // Spawn Position - X off-screen, Y at FLOOR_Y
+            // Add +20 to push them slightly into the sand
+            const obs = obstacles.create(width + 100, FLOOR_Y + 45, key);
+            obs.setDepth(9);
+            obs.setOrigin(0.5, 1); // Anchor at Bottom Center
+
+            // Scale Logic
+            if (obs.height > CONFIG.obstacleMaxHeight) {
+                obs.setScale(CONFIG.obstacleMaxHeight / obs.height);
+            } else if (obs.height < CONFIG.obstacleMinHeight) {
+                obs.setScale(CONFIG.obstacleMinHeight / obs.height);
+            } else {
+                obs.setScale(1.5);
+            }
+
+            // Physics Logic
+            obs.setImmovable(true);
+            obs.body.allowGravity = false;
+            obs.setVelocityX(-gameSpeed);
+
+            // Hitbox
+            const w = obs.width; // Texture width
+            const h = obs.height; // Texture height
+
+            // We want a tighter hitbox.
+            // setBodySize(w, h, center)
+            const boxW = w * 0.4; // Reduced from 0.6 to 0.4 for very tight fit
+            const boxH = h * 0.9;
+            obs.setBodySize(boxW, boxH);
+
+            // For origin (0.5, 1), we need offset to align center-bottom of body with center-bottom of sprite
+            // OffsetX = (Width - BoxWidth) / 2
+            // OffsetY = Height - BoxHeight
+            obs.setOffset((w - boxW) / 2, h - boxH);
+        }
+        function startLevel2(scene) {
+            currentLevel = 2;
+
+            // Flash Effect
+            scene.cameras.main.flash(1000, 255, 255, 255);
+
+            // Update Textures
+            bgSky.setTexture('bg_sky2');
+            bgGround.setTexture('bg_ground2');
+
+            // Fix Sky Scaling (Prevent Vertical Tiling)
+            const skyTex = scene.textures.get('bg_sky2').getSourceImage();
+            const skyScale = Math.max(scene.scale.width / skyTex.width, scene.scale.height / skyTex.height);
+            bgSky.setTileScale(skyScale, skyScale);
+            // Ensure sky is centered
+            bgSky.setOrigin(0.5, 0.5);
+            bgSky.setPosition(scene.scale.width / 2, scene.scale.height / 2);
+
+            // Fix Ground Positioning for Level 2
+            const FLOOR_Y = scene.scale.height - CONFIG.floorOffset;
+            bgGround.setOrigin(0, 0); // Top-Left origin
+            bgGround.setPosition(0, FLOOR_Y); // Place top edge at hero's feet level
+
+            // Re-scale ground
+            const gTex = scene.textures.get('bg_ground2').getSourceImage();
+            // Use scale 1.0 (natural size, 400px height) to look sharp, not zoomed
+            bgGround.setTileScale(1, 1);
+            // Ensure size matches screen width
+            bgGround.setSize(scene.scale.width, gTex.height);
+
+            // Show Level Text
+            const levelText = scene.add.text(scene.scale.width / 2, scene.scale.height / 2, 'LEVEL 2', {
+                fontSize: '64px',
+                fill: '#ffffff',
+                fontFamily: 'Arial Black',
+                stroke: '#000',
+                strokeThickness: 8
+            }).setOrigin(0.5).setDepth(20);
+
+            scene.tweens.add({
+                targets: levelText,
+                scale: 1.5,
+                alpha: 0,
+                duration: 2000,
+                onComplete: () => levelText.destroy()
+            });
+
+            // Make game faster!
+            gameSpeed += 100;
+
+            // Swap Music
+            console.log("Stopping ALL sounds, Playing BGM2");
+            scene.sound.stopAll(); // NUCLEAR OPTION: Stops everything (BGM1, active SFX)
+
+            if (soundBgm2) soundBgm2.play();
+        }
+
+        function togglePause() {
+            if (isGameOver || !gameStarted) return;
+
+            isPaused = !isPaused;
+
+            if (isPaused) {
+                game.scene.scenes[0].physics.pause();
+                player.anims.pause();
+                game.scene.scenes[0].tweens.pauseAll();
+                pauseContainer.setVisible(true);
+                // Optional: Pause music
+                // game.sound.pauseAll(); 
+            } else {
+                game.scene.scenes[0].physics.resume();
+                player.anims.resume();
+                game.scene.scenes[0].tweens.resumeAll();
+                pauseContainer.setVisible(false);
+                // game.sound.resumeAll();
+            }
+        }
+
+        function createMobileControls(scene) {
+            const width = scene.scale.width;
+            const height = scene.scale.height;
+
+            // Pause Button (Top Right)
+            const pauseBtn = scene.add.circle(width - 50, 50, 30, 0x000000, 0.5)
+                .setScrollFactor(0).setDepth(200).setInteractive();
+            const pauseIcon = scene.add.text(width - 50, 50, 'II', { fontSize: '24px', fill: '#fff', fontFamily: 'Arial' })
+                .setOrigin(0.5).setScrollFactor(0).setDepth(201);
+
+            pauseBtn.on('pointerdown', (pointer) => {
+                // Prevent propagation
+                togglePause();
+            });
+
+            // Touch Zones
+            // Zone 1: Left Half (P1 in 2P, or Jump in 1P)
+            const zone1 = scene.add.zone(width * 0.25, height / 2, width / 2, height)
+                .setScrollFactor(0).setDepth(0).setInteractive();
+
+            // Zone 2: Right Half (P2 in 2P, or Jump in 1P)
+            const zone2 = scene.add.zone(width * 0.75, height / 2, width / 2, height)
+                .setScrollFactor(0).setDepth(0).setInteractive();
+
+            // Enable Multi-Touch
+            scene.input.addPointer(2);
+
+            zone1.on('pointerdown', () => {
+                if (!gameStarted) {
+                    if (isTwoPlayerMode) return; // Wait for Start game
+                    startGame();
+                    return;
+                }
+                if (isGameOver) {
+                    restartGame();
+                    return;
+                }
+
+                // In 1P: Jump
+                // In 2P: P1 Jump (Agan)
+                jump();
+            });
+
+            zone2.on('pointerdown', () => {
+                if (!gameStarted) {
+                    startGame();
+                    return;
+                }
+                if (isGameOver) {
+                    restartGame();
+                    return;
+                }
+
+                // In 1P: Jump
+                // In 2P: P2 Jump (Mamitha)
+                if (!isTwoPlayerMode) {
+                    jump();
+                } else {
+                    jump2(); // P2 Jump
+                }
+            });
+        }
+
+    </script>
+</body>
+
+</html>
